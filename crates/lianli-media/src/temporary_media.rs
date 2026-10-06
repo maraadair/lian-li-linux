@@ -19,7 +19,7 @@ impl TemporaryMedia {
     }
 
     fn reserve(bytes: u64, used: &'static AtomicU64, limit: u64) -> Result<Self, MediaError> {
-        used.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        used.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(bytes).filter(|total| *total <= limit)
         }).map_err(|_| MediaError::InvalidConfig(
             "H.264 preparation exceeds the shared 2 GiB temporary-storage limit. Release unused media before retrying.".into()

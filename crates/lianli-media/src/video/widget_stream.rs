@@ -21,7 +21,7 @@ struct DecoderSlot;
 impl DecoderSlot {
     fn acquire() -> Result<Self, MediaError> {
         DECODERS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 (used < MAX_DECODERS).then_some(used + 1)
             })
             .map_err(|_| {

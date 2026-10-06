@@ -3151,7 +3151,7 @@ mod tests {
             Ok(())
         }
         fn set_brightness(&self, value: u8) -> anyhow::Result<()> {
-            let failure = self.brightness_failures.fetch_update(
+            let failure = self.brightness_failures.try_update(
                 Ordering::Relaxed,
                 Ordering::Relaxed,
                 |remaining| remaining.checked_sub(1),

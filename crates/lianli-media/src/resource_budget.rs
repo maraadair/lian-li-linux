@@ -69,7 +69,7 @@ impl Default for RetainedBudget {
 
 impl RetainedBudget {
     pub(crate) fn reserve(&mut self, bytes: usize) -> Result<(), MediaError> {
-        self.used.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+        self.used.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
             used.checked_add(bytes).filter(|total| *total <= self.limit)
         }).map_err(|_| MediaError::InvalidConfig(
             "Prepared media exceeds the shared 1 GiB memory limit. Shorten videos or reduce widget sizes.".into()

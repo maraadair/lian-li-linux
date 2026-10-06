@@ -331,7 +331,7 @@ mod tests {
         ) -> Result<()> {
             if self
                 .deferred_left
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_ok()
@@ -344,7 +344,7 @@ mod tests {
             }
             if self
                 .failures_left
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::Relaxed,
                     std::sync::atomic::Ordering::Relaxed,
                     |remaining| remaining.checked_sub(1),

@@ -59,11 +59,11 @@ impl Output {
             "SDK client disconnected"
         );
         let size = HEADER_SIZE + payload.len();
-        let reserved =
-            self.queued_bytes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                    used.checked_add(size).filter(|total| *total <= QUEUE_BYTES)
-                });
+        let reserved = self
+            .queued_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(size).filter(|total| *total <= QUEUE_BYTES)
+            });
         if payload.len() > MAX_PACKET_BYTES || reserved.is_err() {
             if reserved.is_ok() {
                 self.queued_bytes.fetch_sub(size, Ordering::Relaxed);

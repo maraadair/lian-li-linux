@@ -86,7 +86,7 @@ impl ServiceWriteGate {
             1
         };
         self.pending
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count + slots <= MAX_PENDING_WRITES).then_some(count + slots)
             })
             .map_err(|_| {

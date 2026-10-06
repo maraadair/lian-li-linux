@@ -42,34 +42,53 @@ pub fn run(
     let executable = std::env::current_exe()?;
     let mut retry = Duration::from_secs(1);
     tracing::info!("Waiting for the active graphical login; no GUI is required");
+    let mut last_wait = None;
     while !stop.load(Ordering::Relaxed) {
-        if let Some(session) = monitor
-            .active_session()?
-            .filter(|session| session.uid == uid)
-        {
-            if let Some(lock) = session_lock(&runtime, &session.id)? {
-                if let Some(environment) = discover(Path::new("/proc"), &runtime, &session)? {
-                    drop(lock);
-                    let mut command = Command::new(&executable);
-                    for key in KEYS {
-                        command.env_remove(key);
-                    }
-                    command
-                        .envs(environment)
-                        .env("XDG_RUNTIME_DIR", &runtime)
-                        .env(
-                            "DBUS_SESSION_BUS_ADDRESS",
-                            format!("unix:path={}/bus", runtime.display()),
-                        );
-                    if let Some(socket) = &cli.socket {
-                        command.arg("--socket").arg(socket);
-                    }
-                    if let Some(invocation) = &cli.service_invocation {
-                        command.arg("--service-invocation").arg(invocation);
-                    }
-                    return Err(command.exec()).context("Starting the discovered desktop session");
-                }
+        let wait = match monitor.active_session()? {
+            None => "logind reports no active local graphical session".to_owned(),
+            Some(session) if session.uid != uid => {
+                format!(
+                    "the active login session {} belongs to uid {}",
+                    session.id, session.uid
+                )
             }
+            Some(session) => match session_lock(&runtime, &session.id)? {
+                None => format!(
+                    "another lianli-session process already serves login session {}",
+                    session.id
+                ),
+                Some(lock) => match discover(Path::new("/proc"), &runtime, &session)? {
+                    Discovery::Missing(reason) => {
+                        format!("login session {} was not discovered: {reason}", session.id)
+                    }
+                    Discovery::Found(environment) => {
+                        drop(lock);
+                        let mut command = Command::new(&executable);
+                        for key in KEYS {
+                            command.env_remove(key);
+                        }
+                        command
+                            .envs(environment)
+                            .env("XDG_RUNTIME_DIR", &runtime)
+                            .env(
+                                "DBUS_SESSION_BUS_ADDRESS",
+                                format!("unix:path={}/bus", runtime.display()),
+                            );
+                        if let Some(socket) = &cli.socket {
+                            command.arg("--socket").arg(socket);
+                        }
+                        if let Some(invocation) = &cli.service_invocation {
+                            command.arg("--service-invocation").arg(invocation);
+                        }
+                        return Err(command.exec())
+                            .context("Starting the discovered desktop session");
+                    }
+                },
+            },
+        };
+        if last_wait.as_ref() != Some(&wait) {
+            tracing::info!("Still waiting: {wait}");
+            last_wait = Some(wait);
         }
         let deadline = Instant::now() + retry;
         retry = (retry * 2).min(Duration::from_secs(30));
@@ -99,24 +118,29 @@ fn verify_shared_runtime(runtime: &Path, host_runtime: &Path, uid: u32) -> Resul
     Ok(())
 }
 
-fn discover(
-    proc_root: &Path,
-    runtime: &Path,
-    session: &DesktopSession,
-) -> Result<Option<BTreeMap<String, String>>> {
+enum Discovery {
+    Found(BTreeMap<String, String>),
+    Missing(String),
+}
+
+fn discover(proc_root: &Path, runtime: &Path, session: &DesktopSession) -> Result<Discovery> {
     if session.kind == SessionKind::X11 {
-        return Ok(Some(BTreeMap::from([(
+        return Ok(Discovery::Found(BTreeMap::from([(
             "XDG_SESSION_ID".into(),
             session.id.clone(),
         )])));
     }
     let deadline = Instant::now() + Duration::from_millis(250);
     let mut remaining = 8 * 1024 * 1024usize;
-    let mut selected = None;
+    let mut selected: Option<BTreeMap<String, String>> = None;
     let mut hyprland_sessions = BTreeMap::new();
+    let mut readable = 0usize;
+    let mut matching = 0usize;
     for (count, entry) in fs::read_dir(proc_root)?.enumerate() {
         if count >= 16384 || Instant::now() >= deadline || remaining == 0 {
-            return Ok(None);
+            return Ok(Discovery::Missing(
+                "the process scan exceeded its time or size budget".into(),
+            ));
         }
         let entry = entry?;
         if !entry
@@ -144,9 +168,11 @@ fn discover(
         if read.is_err() || bytes.len() >= limit {
             continue;
         }
+        readable += 1;
         let Some(candidate) = parse(&bytes, session) else {
             continue;
         };
+        matching += 1;
         let socket = runtime.join(&candidate["WAYLAND_DISPLAY"]);
         if !fs::symlink_metadata(socket)
             .is_ok_and(|metadata| metadata.uid() == session.uid && metadata.file_type().is_socket())
@@ -167,15 +193,93 @@ fn discover(
                 continue;
             }
         }
-        if selected
-            .as_ref()
-            .is_some_and(|previous| previous != &candidate)
-        {
-            return Ok(None);
+        if let Some(previous) = selected.as_ref().filter(|previous| *previous != &candidate) {
+            return Ok(Discovery::Missing(format!(
+                "processes disagree on the session environment: {} vs {}",
+                describe(previous),
+                describe(&candidate)
+            )));
         }
         selected = Some(candidate);
     }
-    Ok(selected)
+    if let Some(environment) = selected {
+        return Ok(Discovery::Found(environment));
+    }
+    if let Some(socket) = sole_live_wayland_socket(runtime, session.uid) {
+        tracing::info!(
+            "No readable process carries the session environment; using the only live \
+             compositor socket {socket}"
+        );
+        return Ok(Discovery::Found(BTreeMap::from([
+            ("XDG_SESSION_ID".into(), session.id.clone()),
+            ("WAYLAND_DISPLAY".into(), socket),
+        ])));
+    }
+    let processes = if readable == 0 {
+        format!(
+            "no process environment owned by uid {} is readable",
+            session.uid
+        )
+    } else if matching == 0 {
+        format!(
+            "no readable process has XDG_SESSION_ID={} with WAYLAND_DISPLAY",
+            session.id
+        )
+    } else {
+        "processes in this session name compositor sockets that are not live".into()
+    };
+    Ok(Discovery::Missing(format!(
+        "{processes}, and {} has no single live wayland-N socket",
+        runtime.display()
+    )))
+}
+
+fn describe(environment: &BTreeMap<String, String>) -> String {
+    KEYS.iter()
+        .map(|key| {
+            format!(
+                "{key}={}",
+                environment.get(*key).map_or("<unset>", String::as_str)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// Compositors with file capabilities, such as KWin on Fedora, have a root-owned
+// environ. A single live socket is unambiguous; Hyprland is excluded because it
+// also needs its instance signature.
+fn sole_live_wayland_socket(runtime: &Path, uid: u32) -> Option<String> {
+    if runtime.join("hypr").exists() {
+        return None;
+    }
+    let mut found = None;
+    for entry in fs::read_dir(runtime).ok()?.take(4096) {
+        let entry = entry.ok()?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !name
+            .strip_prefix("wayland-")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.uid() == uid && metadata.file_type().is_socket())
+            || !lianli_display::socket_accepts_connections(
+                &path,
+                Instant::now() + Duration::from_millis(100),
+            )
+        {
+            continue;
+        }
+        if found.replace(name).is_some() {
+            return None;
+        }
+    }
+    found
 }
 
 fn parse(bytes: &[u8], session: &DesktopSession) -> Option<BTreeMap<String, String>> {
@@ -225,6 +329,13 @@ fn parse(bytes: &[u8], session: &DesktopSession) -> Option<BTreeMap<String, Stri
 mod tests {
     use super::*;
 
+    fn found(discovery: Discovery) -> Option<BTreeMap<String, String>> {
+        match discovery {
+            Discovery::Found(environment) => Some(environment),
+            Discovery::Missing(_) => None,
+        }
+    }
+
     #[test]
     fn distrobox_login_requires_the_same_owned_private_runtime() {
         use std::os::unix::fs::PermissionsExt;
@@ -261,14 +372,14 @@ mod tests {
             kind: SessionKind::Wayland,
             locked: false,
         };
-        assert!(discover(&proc_root, &runtime, &session).unwrap().is_none());
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
         let _socket = UnixListener::bind(runtime.join("wayland-1")).unwrap();
         assert_eq!(
-            discover(&proc_root, &runtime, &session).unwrap().unwrap()["WAYLAND_DISPLAY"],
+            found(discover(&proc_root, &runtime, &session).unwrap()).unwrap()["WAYLAND_DISPLAY"],
             "wayland-1"
         );
         session.uid += 1;
-        assert!(discover(&proc_root, &runtime, &session).unwrap().is_none());
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
         session.uid -= 1;
         fs::create_dir(proc_root.join("456")).unwrap();
         fs::write(
@@ -277,7 +388,39 @@ mod tests {
         )
         .unwrap();
         let _other = UnixListener::bind(runtime.join("wayland-2")).unwrap();
-        assert!(discover(&proc_root, &runtime, &session).unwrap().is_none());
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
+    }
+
+    #[test]
+    fn unreadable_compositor_falls_back_to_the_only_live_socket() {
+        use std::os::unix::net::UnixListener;
+        let root = tempfile::tempdir().unwrap();
+        let proc_root = root.path().join("proc");
+        let runtime = root.path().join("runtime");
+        fs::create_dir_all(&proc_root).unwrap();
+        fs::create_dir(&runtime).unwrap();
+        let session = DesktopSession {
+            id: "3".into(),
+            uid: unsafe { libc::geteuid() },
+            kind: SessionKind::Wayland,
+            locked: false,
+        };
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
+
+        drop(UnixListener::bind(runtime.join("wayland-1")).unwrap());
+        let _live = UnixListener::bind(runtime.join("wayland-0")).unwrap();
+        fs::write(runtime.join("wayland-0.lock"), b"").unwrap();
+        let environment = found(discover(&proc_root, &runtime, &session).unwrap()).unwrap();
+        assert_eq!(environment["WAYLAND_DISPLAY"], "wayland-0");
+        assert_eq!(environment["XDG_SESSION_ID"], "3");
+
+        let second = UnixListener::bind(runtime.join("wayland-2")).unwrap();
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
+        drop(second);
+        fs::remove_file(runtime.join("wayland-2")).unwrap();
+
+        fs::create_dir(runtime.join("hypr")).unwrap();
+        assert!(found(discover(&proc_root, &runtime, &session).unwrap()).is_none());
     }
 
     #[test]
@@ -324,7 +467,7 @@ mod tests {
             kind: SessionKind::Wayland,
             locked: false,
         };
-        let environment = discover(&proc_root, &runtime, &session).unwrap().unwrap();
+        let environment = found(discover(&proc_root, &runtime, &session).unwrap()).unwrap();
         server.join().unwrap();
         assert_eq!(environment["HYPRLAND_INSTANCE_SIGNATURE"], "current");
     }

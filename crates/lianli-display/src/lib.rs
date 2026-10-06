@@ -17,6 +17,10 @@ use std::time::Duration;
 
 pub use lianli_shared::display::{OutputRequest, MAX_FRAME_BYTES};
 
+pub fn socket_accepts_connections(path: &std::path::Path, deadline: std::time::Instant) -> bool {
+    socket::connect(path, deadline).is_ok()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
     ModeChanged(Mode, PixelFormat),

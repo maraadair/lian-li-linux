@@ -87,6 +87,10 @@ fn main() -> Result<()> {
         session.id.clone()
     };
     let Some(_singleton) = session_lock(&runtime, &lock_id)? else {
+        tracing::info!(
+            "Another lianli-session process already serves login session {}; exiting",
+            session.id
+        );
         return Ok(());
     };
     monitor.watch_session(&session.id)?;

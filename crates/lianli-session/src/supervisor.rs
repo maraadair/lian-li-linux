@@ -26,6 +26,7 @@ pub fn run(cli: &Cli, monitor: &mut LoginMonitor, session: &str, stop: &AtomicBo
         .transpose()?
         .map(CompositorSocket::new)
         .transpose()?;
+    tracing::info!("Supervising desktop capture for login session {session}");
     let mut next_upgrade_check = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !stop.load(Ordering::Relaxed) && !monitor.process()?.session_ended {

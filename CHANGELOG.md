@@ -3,6 +3,21 @@
 Generated from git history by git-cliff (see .github/cliff.toml).
 Regenerate rather than editing by hand.
 
+## v1.1.6 — 2026-10-06
+
+### CI
+- Move GitHub Actions to Node 24 releases  (`f16f1cd`)
+
+### Chores
+- Replace deprecated atomic fetch_update with try_update  (`2b42588`)
+
+### Fixes
+- **wireless**: Keep sensor data out of clock sync addressing bytes  ([#237](https://github.com/sgtaziz/lian-li-linux/pull/237))
+- **wireless**: Recover devices reporting a latched channel 0 address  (`954b9aa`)
+- **daemon**: Retry failed wireless receiver initialization  (`ede2120`)
+- **session**: Discover KDE sessions and log why capture is waiting  (`71857c2`)
+- **daemon**: Report stale USB enumeration and rejected capture workers  (`f2e381a`)
+
 ## v1.1.5 — 2026-10-01
 
 ### Features

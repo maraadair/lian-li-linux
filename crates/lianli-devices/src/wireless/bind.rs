@@ -208,11 +208,16 @@ impl WirelessController {
         };
 
         let rf_data = build_bind_packet(&device, target_master_mac, target_rx, master_ch, slot);
+        let send_channel = if device.channel == 0 {
+            master_ch
+        } else {
+            device.channel
+        };
 
         self.tx_recover(|handle| {
             for _ in 0..6 {
                 // Recovery cannot rely on the old RX slot. The payload MAC selects the device.
-                self.send_rf_packet_addressed(handle, device.channel, 0xFF, &rf_data)?;
+                self.send_rf_packet_addressed(handle, send_channel, 0xFF, &rf_data)?;
                 thread::sleep(Duration::from_millis(30));
             }
             Ok(())

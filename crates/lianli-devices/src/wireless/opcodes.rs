@@ -354,7 +354,7 @@ mod tests {
     fn picture_packets_route_to_receiver_and_zero_pad_final_chunk() {
         let mut record = [0; 42];
         record[..6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
-        record[12] = 12; // valid channel - 0 is rejected at the parse boundary
+        record[12] = 12;
         record[13] = 2;
         record[18] = 10;
         record[41] = 0x1c;
@@ -396,7 +396,7 @@ mod tests {
         let controller = WirelessController::new();
         let mut record = [0; 42];
         record[..6].copy_from_slice(&[1; 6]);
-        record[12] = 8; // valid channel - 0 is rejected at the parse boundary
+        record[12] = 8;
         record[18] = 10;
         record[41] = 0x1c;
         let mut device = super::super::discovery::parse_device_record(&record, 0).unwrap();

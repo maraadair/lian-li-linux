@@ -667,7 +667,8 @@ impl WirelessController {
                     return false;
                 }
                 if h.observed_master == local && h.raw_master == local {
-                    return h.bind_intent && h.confirmed_invalid_rx == Some(h.raw_rx);
+                    return h.bind_intent
+                        && h.confirmed_invalid_address == Some((h.raw_channel, h.raw_rx));
                 }
                 h.observed_master == [0; 6]
                     && h.raw_master == [0; 6]
@@ -688,11 +689,13 @@ impl WirelessController {
         h.observed_master = h.raw_master;
         h.published.bind_intent = intent;
         h.published.master_mac = h.raw_master;
-        if !intent || super::discovery::is_valid_rx(h.raw_rx) {
+        if !intent || super::discovery::is_valid_address(h.raw_channel, h.raw_rx) {
             h.published.rx_type = h.raw_rx;
         }
-        h.confirmed_invalid_rx = None;
-        h.published.channel = h.raw_channel;
+        h.confirmed_invalid_address = None;
+        if h.raw_channel != 0 {
+            h.published.channel = h.raw_channel;
+        }
         if let Some(device) = self
             .discovered_devices
             .lock()
@@ -1299,7 +1302,8 @@ mod tests {
         let mut healthy = entry([9; 6]);
         healthy.bind_intent = true;
         healthy.raw_rx = 41;
-        healthy.confirmed_invalid_rx = Some(41);
+        healthy.raw_channel = 8;
+        healthy.confirmed_invalid_address = Some((8, 41));
         let c = controller_with_health(vec![(mac(), healthy)]);
         assert_eq!(c.rebind_candidates(), vec![mac()]);
         for blocked in 0..5 {

@@ -177,7 +177,7 @@ mod tests {
     fn device(fan_type: WirelessFanType) -> DiscoveredDevice {
         let mut record = [0; 42];
         record[..6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
-        record[12] = 8; // a real record always carries a valid RF channel
+        record[12] = 8;
         record[13] = 2;
         record[19] = 3;
         record[41] = 0x1c;

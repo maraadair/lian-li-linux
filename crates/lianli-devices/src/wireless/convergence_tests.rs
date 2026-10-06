@@ -125,7 +125,7 @@ fn binding_pause_blocks_only_target_device_and_manual_unbind_keeps_it_blocked() 
     ));
     let mut record = [0; 42];
     record[..6].copy_from_slice(&mac);
-    record[12] = 8; // a real record always carries a valid RF channel
+    record[12] = 8;
     record[41] = 0x1c;
     let device = super::super::discovery::parse_device_record(&record, 0).unwrap();
     let mut health = super::super::discovery::DeviceHealth::new(device);

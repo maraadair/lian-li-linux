@@ -147,7 +147,7 @@ mod aio_tests {
     fn wireless_theme_packet_carries_slot_sequence_and_requires_fresh_ack() {
         let mut record = [0; 42];
         record[..6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
-        record[12] = 8; // a real record always carries a valid RF channel
+        record[12] = 8;
         record[13] = 2;
         record[18] = 10;
         record[41] = 0x1c;

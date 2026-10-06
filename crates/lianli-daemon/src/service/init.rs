@@ -1016,23 +1016,37 @@ impl ServiceManager {
             return;
         }
         self.wireless_recovery_error = None;
-        if let Err(error) = self.wireless.send_rx_sequence() {
-            warn!(%error, "Wireless receiver initialization sequence failed");
-            self.ipc
-                .state
-                .lock()
-                .state_health
-                .wireless_unavailable(&format!(
-                    "Receiver initialization sequence failed: {error:#}"
-                ));
-        } else {
-            self.ipc.state.lock().state_health.wireless_ready();
-        }
+        self.init_wireless_receiver();
         info!("Wireless links active");
         if restart_controllers {
             self.start_fan_control();
             self.start_aio_control();
             self.rebuild_rgb_controller();
+        }
+    }
+
+    pub(super) fn init_wireless_receiver(&mut self) {
+        match self.wireless.send_rx_sequence() {
+            Ok(()) => {
+                if self.wireless_rx_init_pending {
+                    info!("Wireless receiver initialization sequence recovered");
+                }
+                self.wireless_rx_init_pending = false;
+                self.ipc.state.lock().state_health.wireless_ready();
+            }
+            Err(error) => {
+                if !self.wireless_rx_init_pending {
+                    warn!(%error, "Wireless receiver initialization sequence failed");
+                }
+                self.wireless_rx_init_pending = true;
+                self.ipc
+                    .state
+                    .lock()
+                    .state_health
+                    .wireless_unavailable(&format!(
+                        "Receiver initialization sequence failed: {error:#}"
+                    ));
+            }
         }
     }
 

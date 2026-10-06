@@ -244,6 +244,7 @@ pub struct ServiceManager {
     targets: Arc<Mutex<HashMap<usize, ActiveTarget>>>,
     wireless: WirelessController,
     wireless_recovery_error: Option<String>,
+    wireless_rx_init_pending: bool,
     packet_builder: PacketBuilder,
     /// Wired USB device registry (fan handles, HID backends, hot-plug caches).
     registry: DeviceRegistry,
@@ -318,6 +319,7 @@ impl ServiceManager {
             targets: Arc::new(Mutex::new(HashMap::new())),
             wireless: WirelessController::new(),
             wireless_recovery_error: None,
+            wireless_rx_init_pending: false,
             packet_builder: PacketBuilder::new(),
             registry: DeviceRegistry::new(),
             aio_lcd_firmware: AioLcdFirmwareTracker::new(),
@@ -776,6 +778,8 @@ impl ServiceManager {
                     self.refresh_usb_device_cache();
                     if !self.wireless.is_connected() {
                         self.try_wireless();
+                    } else if self.wireless_rx_init_pending {
+                        self.init_wireless_receiver();
                     }
                 }
                 DaemonEvent::DevicePoll => {

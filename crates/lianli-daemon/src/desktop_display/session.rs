@@ -5,6 +5,7 @@ use lianli_shared::display::{
     DisplayCodec, OutputRequest, WorkerClosed, WorkerCommand, WorkerHello, MAX_SESSION_DISPLAYS,
 };
 use lianli_shared::installation::InstallationContext;
+use lianli_shared::session::DesktopSession;
 use std::collections::HashSet;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::net::UnixDatagram;
@@ -186,6 +187,7 @@ fn coordinate(
     let mut worker: Option<Worker> = None;
     let mut session = None;
     let mut handshakes = Vec::new();
+    let mut last_rejection: Option<String> = None;
     let mut next_id = 0u64;
     while !stop.load(Ordering::Relaxed) {
         let events = monitor.process()?;
@@ -241,15 +243,21 @@ fn coordinate(
             let Ok((uid, _)) = channel.peer_credentials() else {
                 return false;
             };
-            let accepted = worker.is_none()
-                && hello.descriptors.is_empty()
-                && hello.message.version == env!("CARGO_PKG_VERSION")
-                && session
-                    .as_ref()
-                    .is_some_and(|s| s.matches_worker(uid, &hello.message.session_id));
-            if !accepted {
+            let rejection = worker_rejection(
+                worker.is_some(),
+                &hello.message,
+                hello.descriptors.is_empty(),
+                uid,
+                session.as_ref(),
+            );
+            if let Some(reason) = rejection {
+                if last_rejection.as_ref() != Some(&reason) {
+                    tracing::warn!("Rejected desktop capture worker: {reason}");
+                    last_rejection = Some(reason);
+                }
                 return false;
             }
+            last_rejection = None;
             let Ok(owned) = channel.as_fd().try_clone_to_owned() else {
                 return false;
             };
@@ -394,5 +402,75 @@ fn poll(descriptors: &[(i32, i16)], timeout: Duration) {
     if result < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
         // Avoid a hot loop if the process exhausts its polling resources.
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn worker_rejection(
+    worker_registered: bool,
+    hello: &WorkerHello,
+    no_descriptors: bool,
+    uid: u32,
+    session: Option<&DesktopSession>,
+) -> Option<String> {
+    if worker_registered {
+        return Some("another capture worker is already registered".into());
+    }
+    if !no_descriptors {
+        return Some("the handshake carried unexpected file descriptors".into());
+    }
+    if hello.version != env!("CARGO_PKG_VERSION") {
+        return Some(format!(
+            "worker version {} does not match daemon version {}",
+            hello.version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    match session {
+        None => Some(format!(
+            "worker session {} is not the active graphical session; logind reports none",
+            hello.session_id
+        )),
+        Some(active) if !active.matches_worker(uid, &hello.session_id) => Some(format!(
+            "worker session {} (uid {uid}) does not match active session {} (uid {}, {:?})",
+            hello.session_id, active.id, active.uid, active.kind
+        )),
+        Some(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lianli_shared::session::SessionKind;
+
+    #[test]
+    fn worker_rejections_name_the_failed_condition() {
+        let hello = WorkerHello {
+            session_id: "3".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        };
+        let active = DesktopSession {
+            id: "3".into(),
+            uid: 1000,
+            kind: SessionKind::Wayland,
+            locked: false,
+        };
+        assert!(worker_rejection(false, &hello, true, 1000, Some(&active)).is_none());
+        assert!(worker_rejection(true, &hello, true, 1000, Some(&active))
+            .unwrap()
+            .contains("already registered"));
+        assert!(worker_rejection(false, &hello, true, 1000, None)
+            .unwrap()
+            .contains("logind reports none"));
+        assert!(worker_rejection(false, &hello, true, 1001, Some(&active))
+            .unwrap()
+            .contains("does not match active session"));
+        let stale = WorkerHello {
+            session_id: "3".into(),
+            version: "0.0.0".into(),
+        };
+        assert!(worker_rejection(false, &stale, true, 1000, Some(&active))
+            .unwrap()
+            .contains("does not match daemon version"));
     }
 }

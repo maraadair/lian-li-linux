@@ -53,6 +53,10 @@ impl PostSwitchRefresh {
         }
     }
 
+    fn is_idle(&self) -> bool {
+        self.0.is_none()
+    }
+
     fn take_due(&mut self, now: Instant) -> bool {
         let Some(window) = &mut self.0 else {
             return false;
@@ -66,6 +70,18 @@ impl PostSwitchRefresh {
             window.next = (now + REFRESH_INTERVAL).min(window.until);
         }
         true
+    }
+}
+
+fn report_stale_usb_enumeration() {
+    let missing = lianli_devices::detect::known_devices_missing_from_libusb();
+    if !missing.is_empty() {
+        warn!(
+            "USB devices listed by the kernel are missing from libusb after a mode switch: {}. \
+             USB hotplug events are not reaching the daemon, which happens inside some \
+             containers; restart the daemon to rescan",
+            missing.join(", ")
+        );
     }
 }
 
@@ -281,6 +297,9 @@ impl ServiceManager {
         self.mode_switch_suppression.retain(|_, until| now < *until);
         if self.post_switch_refresh.take_due(now) {
             self.refresh_usb_device_cache();
+            if self.post_switch_refresh.is_idle() {
+                report_stale_usb_enumeration();
+            }
         }
     }
 

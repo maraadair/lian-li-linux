@@ -12,7 +12,9 @@ pub use backends::{
 };
 pub use binding::ensure_hid_devices_bound;
 pub use controllers::create_hid_lcd_device;
-pub use enumerate::{enumerate_devices, probe_tl_lcd_port_indices};
+pub use enumerate::{
+    enumerate_devices, known_devices_missing_from_libusb, probe_tl_lcd_port_indices,
+};
 
 use lianli_shared::device_id::DeviceFamily;
 use rusb::{Device, GlobalContext};

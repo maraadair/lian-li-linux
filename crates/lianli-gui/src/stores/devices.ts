@@ -97,7 +97,7 @@ export const useDevicesStore = defineStore("devices", () => {
     displaySwitches.value[device.device_id] = { ...device };
     pending.set(device.device_id, "switch", true);
     switchTimers.set(device.device_id, setTimeout(() => {
-      finishDisplaySwitch(device.device_id, `${device.name}: mode switch timed out. Recheck the device and daemon logs before retrying.`);
+      finishDisplaySwitch(device.device_id, `${device.name}: the daemon did not detect the panel in its new mode. Check the daemon log for USB hotplug warnings before retrying.`);
     }, DISPLAY_SWITCH_TIMEOUT_MS));
     return true;
   }
